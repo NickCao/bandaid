@@ -1,3 +1,3 @@
-LDFLAGS=-lsystemd
+LDFLAGS=-lsystemd -lseccomp
 
 bandaid: bandaid.c
