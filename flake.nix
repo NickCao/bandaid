@@ -12,7 +12,6 @@
             name = "bandaid";
             src = self;
             nativeBuildInputs = with pkgs;[
-              stdenv.cc
               meson
               ninja
               pkg-config
