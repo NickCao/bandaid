@@ -1,10 +1,11 @@
 #define _GNU_SOURCE
-#include <netinet/in.h>
 #include <seccomp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/queue.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -61,6 +62,9 @@ int main(int argc, char **argv, char **envp) {
   if (notifd == -1)
     exit(1);
 
+  fd_set fds;
+  FD_ZERO(&fds);
+
   while (1) {
     struct seccomp_notif *req;
     struct seccomp_notif_resp *resp;
@@ -82,13 +86,30 @@ int main(int argc, char **argv, char **envp) {
 
     if (req->data.nr == __NR_socket) {
       int type = req->data.args[1];
-      struct seccomp_notif_addfd addfd;
-      addfd.id = req->id;
-      addfd.srcfd = SD_LISTEN_FDS_START; // TODO: find matching fd
-      addfd.newfd = 0;
-      addfd.flags = 0;
-      addfd.newfd_flags = (type & SOCK_CLOEXEC) ? O_CLOEXEC : 0;
-      resp->val = ioctl(notifd, SECCOMP_IOCTL_NOTIF_ADDFD, &addfd);
+      int found = 0;
+      for (int fd = SD_LISTEN_FDS_START; fd < SD_LISTEN_FDS_START + num_fds;
+           fd++) {
+        if (sd_is_socket(fd, req->data.args[0],
+                         req->data.args[1] & ~SOCK_NONBLOCK & ~SOCK_CLOEXEC,
+                         -1)) {
+          struct seccomp_notif_addfd addfd;
+          addfd.id = req->id;
+          addfd.srcfd = fd;
+          addfd.newfd = 0;
+          addfd.flags = 0;
+          addfd.newfd_flags = (type & SOCK_CLOEXEC) ? O_CLOEXEC : 0;
+          int newfd = ioctl(notifd, SECCOMP_IOCTL_NOTIF_ADDFD, &addfd);
+          resp->val = newfd;
+          FD_SET(newfd, &fds);
+          found = 1;
+        }
+      }
+      if (!found) {
+        resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+      }
+    } else if (req->data.nr == __NR_bind) {
+      if (!FD_ISSET(req->data.args[0], &fds))
+        resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
     }
 
     if (seccomp_notify_respond(notifd, resp) != 0) {
